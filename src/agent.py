@@ -3,9 +3,9 @@ import os
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.agents.middleware import SummarizationMiddleware
-# from langchain_ollama import ChatOllama
+from langchain_ollama import ChatOllama
 # from langchain_openrouter import ChatOpenRouter
-from langchain_google_genai import ChatGoogleGenerativeAI
+# from langchain_google_genai import ChatGoogleGenerativeAI
 
 from state import ZivoAgentContext, ZivoAgentState
 from tools.product_tools import (
@@ -25,26 +25,26 @@ from tools.knowledge_tools import search_knowledge
 
 load_dotenv()
 
-# model = ChatOllama(
-#     model=os.getenv("OLLAMA_MODEL"),
-#     base_url=os.getenv("OLLAMA_BASE_URL"),
-#     client_kwargs={
-#         "headers": {
-#             "Authorization": f"Bearer {os.getenv("OLLAMA_API_KEY")}"
-#         }
-#     },
-#     sync_client_kwargs={
-#         "timeout": 300.0
-#     },
-# )
-
-model = ChatGoogleGenerativeAI(
-    model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
-    google_api_key=os.getenv("GEMINI_API_KEY"),
-    temperature=0,
-    timeout=180,
-    max_retries=1,
+model = ChatOllama(
+    model=os.getenv("OLLAMA_MODEL"),
+    base_url=os.getenv("OLLAMA_BASE_URL"),
+    client_kwargs={
+        "headers": {
+            "Authorization": f"Bearer {os.getenv("OLLAMA_API_KEY")}"
+        }
+    },
+    sync_client_kwargs={
+        "timeout": 300.0
+    },
 )
+
+# model = ChatGoogleGenerativeAI(
+#     model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
+#     google_api_key=os.getenv("GEMINI_API_KEY"),
+#     temperature=0,
+#     timeout=180,
+#     max_retries=1,
+# )
 
 summarization = SummarizationMiddleware(
     model=model,
