@@ -9,7 +9,7 @@ from langchain_ollama import OllamaEmbeddings
 # Locate the main ai directory 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 
-VECTOR_STORE_PATH = PROJECT_DIR / "rag_learning" / "chroma_db"
+VECTOR_STORE_PATH = PROJECT_DIR / "rag" / "chroma_db"
 
 load_dotenv(PROJECT_DIR / ".env")
 

@@ -13,7 +13,7 @@ __pycache__/
 *.log
 
 # Generated vector database
-rag_learning/chroma_db/
+rag/chroma_db/
 
 # Local database and runtime files
 *.sqlite

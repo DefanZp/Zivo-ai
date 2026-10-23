@@ -10,7 +10,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DOCUMENT_PATH = BASE_DIR / "documents" / "returns_policy.txt"
 VECTOR_STORE_PATH = BASE_DIR / "chroma_db"
 
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR.parent / ".env")
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
 
@@ -51,7 +51,7 @@ for index, chunk in enumerate(chunks):
 
 # 3. Create the embedding model.
 embeddings = OllamaEmbeddings(
-    model=os.getenv("OLLAMA_MODEL"),
+    model=os.getenv("OLLAMA_EMBEDDINGS_MODEL"),
     base_url=os.getenv("OLLAMA_BASE_URL"),
     client_kwargs={
         "headers": {
