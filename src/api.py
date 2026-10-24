@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-
+import logging
 from fastapi import (
     Depends, 
     FastAPI, 
@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from service import ZivoAgentService
 from thread_activity import ensure_thread_activity_table, record_thread_activity
+logger = logging.getLogger("uvicorn.error")
 
 load_dotenv()
 
@@ -146,6 +147,18 @@ def chat(
         request.user_message,
         cart_api_token,
     )
+
+    # Log nama tool yang dipanggil oleh agent.
+    for message in result.get("messages", []):
+        tool_calls = getattr(message, "tool_calls", [])
+
+        for tool_call in tool_calls:
+            tool_name = tool_call.get("name", "unknown")
+
+            logger.info(
+                "AI Agent memanggil tool: %s",
+                tool_name,
+            )
 
     last_message = result["messages"][-1]
     content = last_message.content
