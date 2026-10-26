@@ -147,7 +147,16 @@ def cart_request(
 
 @mcp.tool()
 def search_products(query: str, limit: int = 5) -> str:
-    """Search Zivo products by name or keyword."""
+    """
+    Search the product catalog by product name, category, or attributes.
+
+    The catalog primarily uses English product names and descriptions.
+    Convert the user's product search query into concise English
+    search terms before calling this tool.
+
+    Preserve relevant attributes such as color, material, and style.
+    Return matching catalog products; never invent product results.
+    """
 
     if not query.strip():
         return json.dumps({

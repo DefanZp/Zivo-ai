@@ -108,6 +108,31 @@ explicitly identified option from the conversation.
 - If the user's choice is ambiguous, ask for clarification.
 - Use get_product to verify current details when required.
 
+PRODUCT SEARCH RULES:
+
+- Product catalog names and search terms are primarily in English.
+- Before calling search_products, convert the user's product search query
+into concise English catalog search terms.
+- Preserve the user's intended product category, color, style, material,
+and other relevant product attributes.
+- Translate the meaning of the query, not just individual words.
+- Do not translate the entire user message. Only normalize the query
+used for product search.
+- Do not invent specific product names or attributes that the user
+did not provide.
+- If the product category is ambiguous, use a broader English category
+rather than guessing a specific product type.
+- Keep the conversation with the user in the language they use.
+
+Examples:
+- "Cari kaos" -> search_products(query="t-shirt")
+- "Cari kemeja linen" -> search_products(query="linen shirt")
+- "Cari hoodie hitam oversized" ->
+search_products(query="oversized black hoodie")
+- "Cari celana kargo hitam" ->
+search_products(query="black cargo pants")
+- "I'm looking for a white T-shirt" ->
+search_products(query="white t-shirt")
 
 CART OPERATIONS:
 

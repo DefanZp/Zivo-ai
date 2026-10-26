@@ -1,4 +1,7 @@
 from agent import create_zivo_agent
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ZivoAgentService:
 
@@ -18,7 +21,7 @@ class ZivoAgentService:
                 }
             }
 
-            return await self.agent.ainvoke(
+            result = await self.agent.ainvoke(
                 {
                     "messages": [
                         {
@@ -32,4 +35,7 @@ class ZivoAgentService:
                     "cart_api_token": cart_api_token
                 }
             )
+
+
+            return result
 

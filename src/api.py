@@ -143,7 +143,7 @@ async def chat(
         if authorization and credentials is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Authorization header.",
+                detail="Invalid Authorization header.", 
             )
 
         user_id: int | None = None
@@ -187,8 +187,9 @@ async def chat(
                 tool_name = tool_call.get("name", "unknown")
 
                 logger.info(
-                    "AI Agent memanggil tool: %s",
+                    "AI Agent memanggil tool: %s | args=%s",
                     tool_name,
+                    tool_call.get("args", {}),
                 )
 
         last_message = result["messages"][-1]
