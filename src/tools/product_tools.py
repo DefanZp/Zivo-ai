@@ -340,6 +340,7 @@ def clear_cart(runtime: ToolRuntime):
         path="/api/cart",
         runtime=runtime,
     )
+
 @tool
 def set_current_product(
     product_id: int,
