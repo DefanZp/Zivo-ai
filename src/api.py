@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import httpx
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langchain_core.messages import ToolMessage
 from pydantic import BaseModel, Field
 
 from service import ZivoAgentService
@@ -179,17 +180,27 @@ async def chat(
             cart_api_token,
         )
 
-        # Log nama tool yang dipanggil oleh agent.
+        # Log pemanggilan tool dan hasil eksekusinya.
         for message in result.get("messages", []):
+
+            # 1. Catat tool yang diminta oleh AI Agent.
             tool_calls = getattr(message, "tool_calls", [])
 
             for tool_call in tool_calls:
-                tool_name = tool_call.get("name", "unknown")
+                logger.info(
+                    "[TRACE] AI TOOL CALL | name=%s | args=%s",
+                    tool_call.get("name"),
+                    tool_call.get("args", {}),
+                )
+
+            # 2. Catat hasil yang dikembalikan oleh tool.
+            if isinstance(message, ToolMessage):
+                tool_name = getattr(message, "name", None) or "unknown"
 
                 logger.info(
-                    "AI Agent memanggil tool: %s | args=%s",
+                    "[TRACE] TOOL RESULT | name=%s | content=%s",
                     tool_name,
-                    tool_call.get("args", {}),
+                    message.content,
                 )
 
         last_message = result["messages"][-1]

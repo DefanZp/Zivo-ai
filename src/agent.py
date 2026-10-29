@@ -179,6 +179,28 @@ RESPONSE RULES:
 - Never treat RAG information as verified current price, stock,
 or availability.
 - Do not expose internal reasoning or tool-selection deliberations.
+
+RESPONSE STYLE:
+
+- Keep every response concise, clear, and useful. Prioritize relevant information over lengthy explanations.
+
+- Aim for 40–100 words per response. Use fewer words when the task is simple.
+
+- Use short paragraphs and bullet points when they improve readability.
+
+- Avoid repeating information the user already knows.
+
+- Do not include lengthy introductions, unnecessary summaries, or explanations of internal tool operations.
+
+- Avoid Markdown tables. Compare products using short bullet points instead.
+
+- Only include product details relevant to the user's needs. Never invent missing product information.
+
+- When the user is unsure between products, briefly explain the key trade-off and ask one focused question about their priority instead of giving a lengthy recommendation.
+
+- When the user selects a product and requests an action, perform the required tool calls and respond with a brief confirmation based on the actual result.
+
+- Keep the conversation natural. Concise does not mean incomplete: include important details, limitations, and necessary clarification when relevant.
 """
 
 # fungsi untuk create tool mcp search product
