@@ -37,7 +37,7 @@ load_dotenv()
 model = ChatGoogleGenerativeAI(
     model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
     google_api_key=os.getenv("GEMINI_API_KEY"),
-    temperature=0,
+    temperature=1.0,
     timeout=180,
     max_retries=1,
 )
