@@ -1,3 +1,4 @@
+import json
 import os
 from contextlib import asynccontextmanager
 import logging
@@ -10,6 +11,7 @@ from fastapi import (
     status
 )
 from dotenv import load_dotenv
+from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import httpx
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -224,3 +226,84 @@ async def chat(
             "thread_id": request.thread_id,
             "response": response_text,
         }
+
+@app.post("/chat/stream")
+async def chat_stream(
+        request: ChatRequest,
+        authorization: str | None = Header(default=None),
+        credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> str:
+
+    service = app.state.agent_service
+
+    # Validasi header Authorization.
+    if authorization and credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization header.",
+        )
+
+    user_id: int | None = None
+    cart_api_token: str | None = None
+
+    if credentials is not None:
+        cart_api_token = credentials.credentials
+        user_id = verify_user_token(cart_api_token)
+
+    # Pisahkan thread user dan guest.
+    if user_id is not None:
+        effective_thread_id = (
+            f"user:{user_id}:thread:{request.thread_id}"
+        )
+
+        record_thread_activity(
+            db_uri=db_uri,
+            effective_thread_id=effective_thread_id,
+            user_id=user_id,
+            client_thread_id=request.thread_id,
+        )
+    else:
+        effective_thread_id = (
+            f"guest:thread:{request.thread_id}"
+        )
+
+    async def event_generator():
+        try:
+            async for text_chunk in service.chat_stream(
+                effective_thread_id,
+                request.user_message,
+                cart_api_token,
+            ):
+                if not text_chunk:
+                    continue
+
+                # Kirim satu potongan teks sebagai SSE event.
+                payload = json.dumps(
+                    {"content": text_chunk},
+                    ensure_ascii=False
+                )
+
+                yield f"event: token\ndata: {payload}\n\n"
+
+            # Beri tahu frontend bahwa stream sudah selesai.
+            yield "event: done\ndata: {}\n\n"
+
+        except Exception:
+            logger.exception("[STREAM] AI response stream failed")
+
+            # Jangan bocorkan detail internal exception ke client.
+            payload = json.dumps(
+                {"message": "Unable to stream AI response."}
+            )
+
+            yield f"event: error\ndata: {payload}\n\n"
+
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
