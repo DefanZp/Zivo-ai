@@ -3,19 +3,19 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 BASE_DIR = Path(__file__).resolve().parent
 DOCUMENT_PATH = BASE_DIR / "documents" / "returns_policy.txt"
-VECTOR_STORE_PATH = BASE_DIR / "chroma_db"
+VECTOR_STORE_PATH = BASE_DIR / "chroma_gemini_db"
 
 load_dotenv(BASE_DIR.parent / ".env")
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-if not OLLAMA_BASE_URL:
-    raise ValueError("OLLAMA_BASE_URL belum dikonfigurasi.")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY belum dikonfigurasi.")
 
 if not DOCUMENT_PATH.exists():
     raise FileNotFoundError(
@@ -44,20 +44,14 @@ chunks = text_splitter.create_documents(
 
 print(f"Jumlah chunk: {len(chunks)}")
 
-for index, chunk in enumerate(chunks):
-    print(f"\nChunk {index + 1}:")
-    print(chunk.page_content)
-
-
 # 3. Create the embedding model.
-embeddings = OllamaEmbeddings(
-    model=os.getenv("OLLAMA_EMBEDDINGS_MODEL"),
-    base_url=os.getenv("OLLAMA_BASE_URL"),
-    client_kwargs={
-        "headers": {
-            "Authorization": f"Bearer {os.getenv('OLLAMA_API_KEY')}"
-        }
-    },
+embeddings = GoogleGenerativeAIEmbeddings(
+    model=os.getenv(
+        "GEMINI_EMBEDDING_MODEL",
+        "models/gemini-embedding-001",
+    ),
+    google_api_key=GEMINI_API_KEY,
+    task_type="RETRIEVAL_DOCUMENT",
 )
 
 # 4. Connect to a persistent Chroma vector store.
@@ -79,4 +73,6 @@ vector_store.add_documents(
 )
 
 print("\nIngestion selesai.")
+print(f"Embedding model: {embeddings.model}")
 print(f"Vector store tersimpan di: {VECTOR_STORE_PATH}")
+print(f"Total dokumen di-index: {len(chunks)}")

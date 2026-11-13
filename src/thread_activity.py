@@ -1,11 +1,15 @@
+
 import psycopg
 
 
-def ensure_thread_activity_table(db_uri: str)-> None:
+async def ensure_thread_activity_table(db_uri: str) -> None:
     """Create the thread activity table if it does not exist."""
 
-    with psycopg.connect(db_uri) as connection:
-        connection.execute(
+    async with await psycopg.AsyncConnection.connect(
+        db_uri
+    ) as connection:
+
+        await connection.execute(
             """
             CREATE TABLE IF NOT EXISTS ai_thread_activity (
                 thread_id TEXT PRIMARY KEY,
@@ -16,7 +20,7 @@ def ensure_thread_activity_table(db_uri: str)-> None:
             """
         )
 
-        connection.execute(
+        await connection.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_ai_thread_activity_last_activity
             ON ai_thread_activity (last_activity_at)
@@ -24,16 +28,19 @@ def ensure_thread_activity_table(db_uri: str)-> None:
         )
 
 
-def record_thread_activity(
-        db_uri: str,
-        effective_thread_id: str,
-        user_id: int,
-        client_thread_id: str,
-)->None:
+async def record_thread_activity(
+    db_uri: str,
+    effective_thread_id: str,
+    user_id: int,
+    client_thread_id: str,
+) -> None:
     """Insert or update the last activity timestamp for a thread."""
 
-    with psycopg.connect(db_uri) as connection:
-        connection.execute(
+    async with await psycopg.AsyncConnection.connect(
+        db_uri
+    ) as connection:
+
+        await connection.execute(
             """
             INSERT INTO ai_thread_activity (
                 thread_id,

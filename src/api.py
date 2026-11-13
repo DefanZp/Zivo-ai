@@ -40,7 +40,7 @@ security = HTTPBearer(auto_error=False)
 async def lifespan(app: FastAPI):
 
     # Siapkan tabel aktivitas percakapan.
-    ensure_thread_activity_table(db_uri)
+    await ensure_thread_activity_table(db_uri)
 
     # Lokasi file MCP server.
     server_path = Path(__file__).resolve().with_name(
@@ -89,16 +89,19 @@ class ChatRequest(BaseModel):
     thread_id: str = Field(min_length=1, max_length=100)
     user_message: str = Field(min_length=1, max_length=5000)
 
-def verify_user_token(token: str) -> int:
+async def verify_user_token(token: str) -> int:
     try:
-        response = httpx.get(
-            f"{backend_url}/api/user/profile",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            },
-            timeout=10.0,
-        )
+        async with httpx.AsyncClient(
+            timeout=10.0
+        ) as client:
+
+            response = await client.get(
+                f"{backend_url}/api/user/profile",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
+            )
 
     except httpx.RequestError:
         raise HTTPException(
@@ -133,106 +136,136 @@ def verify_user_token(token: str) -> int:
             detail="Invalid authentication response.",
         )
 
+
 @app.post("/chat")
 async def chat(
-        request: ChatRequest,
-        authorization: str | None = Header(default=None),
-        credentials: HTTPAuthorizationCredentials | None = Depends(security),
-        ):
+    request: ChatRequest,
+    authorization: str | None = Header(default=None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    service = app.state.agent_service
 
-        service = app.state.agent_service
+    if authorization and credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization header.",
+        )
 
-        # Tolak header Authorization yang formatnya tidak valid.
-        if authorization and credentials is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid Authorization header.", 
-            )
+    user_id: int | None = None
+    cart_api_token: str | None = None
 
-        user_id: int | None = None
-        cart_api_token: str | None = None
+    if credentials is not None:
+        cart_api_token = credentials.credentials
+        user_id = await verify_user_token(cart_api_token)
 
-        if credentials is not None:
-            cart_api_token = credentials.credentials
-            user_id = verify_user_token(cart_api_token)
+    if user_id is not None:
+        effective_thread_id = (
+            f"user:{user_id}:thread:{request.thread_id}"
+        )
 
-        if user_id is not None:
-            # Namespace percakapan user yang sudah login.
-            effective_thread_id = (
-                f"user:{user_id}:thread:{request.thread_id}"
-            )
+        await record_thread_activity(
+            db_uri=db_uri,
+            effective_thread_id=effective_thread_id,
+            user_id=user_id,
+            client_thread_id=request.thread_id,
+        )
+    else:
+        effective_thread_id = (
+            f"guest:thread:{request.thread_id}"
+        )
 
-            # Aktivitas dicatat menggunakan mekanisme yang sudah ada.
-            record_thread_activity(
-                db_uri=db_uri,
-                effective_thread_id=effective_thread_id,
-                user_id=user_id,
-                client_thread_id=request.thread_id,
-            )
-        else:
-            # Namespace guest harus terpisah dari namespace user.
-            effective_thread_id = (
-                f"guest:thread:{request.thread_id}"
-            )
-
-
+    # Jalankan AI agent.
+    try:
         result = await service.chat(
             effective_thread_id,
             request.user_message,
             cart_api_token,
         )
 
-        # Log pemanggilan tool dan hasil eksekusinya.
-        for message in result.get("messages", []):
+    except Exception:
+        logger.exception("[CHAT] AI agent execution failed")
 
-            # 1. Catat tool yang diminta oleh AI Agent.
-            tool_calls = getattr(message, "tool_calls", [])
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to process your message. Please try again.",
+        )
 
-            for tool_call in tool_calls:
-                logger.info(
-                    "[TRACE] AI TOOL CALL | name=%s | args=%s",
-                    tool_call.get("name"),
-                    tool_call.get("args", {}),
-                )
+    # Validasi hasil agent.
+    if not isinstance(result, dict):
+        logger.error("[CHAT] Agent returned an invalid result.")
 
-            # 2. Catat hasil yang dikembalikan oleh tool.
-            if isinstance(message, ToolMessage):
-                tool_name = getattr(message, "name", None) or "unknown"
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to generate AI response.",
+        )
 
-                logger.info(
-                    "[TRACE] TOOL RESULT | name=%s | content=%s",
-                    tool_name,
-                    message.content,
-                )
+    messages = result.get("messages")
 
-        last_message = result["messages"][-1]
-        content = last_message.content
+    if not isinstance(messages, list) or not messages:
+        logger.error("[CHAT] Agent returned no messages.")
 
-        # cek jika response berupa list normalisasi ke text
-        if isinstance(content, str):
-            response_text = content
-        elif isinstance(content, list):
-            response_text = "\n".join(
-                item["text"]
-                for item in content
-                if isinstance(item, dict)
-                and item.get("type") == "text"
-                and isinstance(item.get("text"), str)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to generate AI response.",
+        )
+
+    # Log metadata tool tanpa mencatat data sensitif.
+    for message in messages:
+        tool_calls = getattr(message, "tool_calls", [])
+
+        for tool_call in tool_calls:
+            logger.info(
+                "[TRACE] AI TOOL CALL | name=%s | id=%s",
+                tool_call.get("name"),
+                tool_call.get("id"),
             )
-        else:
-            response_text = ""
 
-        return {
-            "thread_id": request.thread_id,
-            "response": response_text,
-        }
+        if isinstance(message, ToolMessage):
+            logger.info(
+                "[TRACE] TOOL RESULT | name=%s | tool_call_id=%s",
+                message.name or "unknown",
+                message.tool_call_id,
+            )
+
+    # Ambil dan normalisasi response terakhir.
+    last_message = messages[-1]
+    content = getattr(last_message, "content", None)
+
+    if isinstance(content, str):
+        response_text = content
+
+    elif isinstance(content, list):
+        response_text = "\n".join(
+            item["text"]
+            for item in content
+            if isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+        )
+
+    else:
+        response_text = ""
+
+    if not response_text.strip():
+        logger.error("[CHAT] Agent returned empty response content.")
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to generate AI response.",
+        )
+
+    return {
+        "thread_id": request.thread_id,
+        "response": response_text,
+    }
+
 
 @app.post("/chat/stream")
 async def chat_stream(
         request: ChatRequest,
         authorization: str | None = Header(default=None),
         credentials: HTTPAuthorizationCredentials | None = Depends(security),
-) -> str:
+) -> StreamingResponse:
 
     service = app.state.agent_service
 
@@ -248,7 +281,7 @@ async def chat_stream(
 
     if credentials is not None:
         cart_api_token = credentials.credentials
-        user_id = verify_user_token(cart_api_token)
+        user_id = await verify_user_token(cart_api_token)
 
     # Pisahkan thread user dan guest.
     if user_id is not None:
@@ -256,7 +289,7 @@ async def chat_stream(
             f"user:{user_id}:thread:{request.thread_id}"
         )
 
-        record_thread_activity(
+        await record_thread_activity(
             db_uri=db_uri,
             effective_thread_id=effective_thread_id,
             user_id=user_id,

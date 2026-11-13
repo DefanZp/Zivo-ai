@@ -2,9 +2,6 @@ from collections.abc import AsyncIterator
 from langchain_core.messages import AIMessageChunk
 
 from agent import create_zivo_agent
-import logging
-
-logger = logging.getLogger(__name__)
 
 class ZivoAgentService:
 
@@ -99,7 +96,7 @@ class ZivoAgentService:
                 if content:
                     yield content
 
-            # Dukungan jika output berbentuk blok teks.
+            # jika output berbentuk blok teks.
             elif isinstance(content, list):
                 for item in content:
                     if (

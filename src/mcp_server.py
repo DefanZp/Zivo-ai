@@ -4,7 +4,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from mcp.server import MCPServer
 import requests
 
@@ -18,27 +18,35 @@ backend_url = os.getenv("BACKEND_URL")
 mcp = MCPServer("Zivo Product MCP")
 
 
-# Konfiurasi rag
+# RAG configuration
 RAG_DIR = PROJECT_DIR / "rag"
-VECTOR_STORE_PATH = RAG_DIR / "chroma_db"
+VECTOR_STORE_PATH = RAG_DIR / "chroma_gemini_db"
 
 PRODUCT_COLLECTION_NAME = "zivo_product_catalog"
 POLICY_COLLECTION_NAME = "zivo_returns_policy"
 
-PRODUCT_SEARCH_INSTRUCTION = (
-    "Given a shopping query, retrieve product catalog entries "
-    "that best match the requested product name and attributes."
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+GEMINI_EMBEDDING_MODEL = os.getenv(
+    "GEMINI_EMBEDDING_MODEL",
+    "models/gemini-embedding-001",
 )
 
-embeddings = OllamaEmbeddings(
-    model=os.getenv("OLLAMA_EMBEDDINGS_MODEL"),
-    base_url=os.getenv("OLLAMA_BASE_URL"),
-    client_kwargs={
-        "headers": {
-            "Authorization": f"Bearer {os.getenv('OLLAMA_API_KEY')}"
-        }
-    },
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY belum dikonfigurasi.")
+
+if not VECTOR_STORE_PATH.exists():
+    raise FileNotFoundError(
+        f"Chroma vector store tidak ditemukan: {VECTOR_STORE_PATH}"
+    )
+
+
+embeddings = GoogleGenerativeAIEmbeddings(
+    model=GEMINI_EMBEDDING_MODEL,
+    google_api_key=GEMINI_API_KEY,
+    task_type="RETRIEVAL_QUERY",
 )
+
 
 product_vector_store = Chroma(
     collection_name=PRODUCT_COLLECTION_NAME,
@@ -46,11 +54,13 @@ product_vector_store = Chroma(
     persist_directory=str(VECTOR_STORE_PATH),
 )
 
+
 policy_vector_store = Chroma(
     collection_name=POLICY_COLLECTION_NAME,
     embedding_function=embeddings,
-    persist_directory=str(VECTOR_STORE_PATH)
+    persist_directory=str(VECTOR_STORE_PATH),
 )
+
 
 def cart_request(
     method: str,
@@ -60,12 +70,21 @@ def cart_request(
 ) -> str:
     """Send an authenticated request to the cart API."""
 
-    if not cart_api_token.strip():
+    if not isinstance(backend_url, str) or not backend_url.strip():
+        return json.dumps({
+            "success": False,
+            "code": "SERVICE_NOT_CONFIGURED",
+            "message": "Cart service is not configured.",
+        })
+
+    if not isinstance(cart_api_token, str) or not cart_api_token.strip():
         return json.dumps({
             "success": False,
             "code": "AUTH_REQUIRED",
             "message": "Please log in first.",
         })
+
+    method = method.upper()
 
     try:
         response = requests.request(
@@ -83,79 +102,91 @@ def cart_request(
             return json.dumps({
                 "success": False,
                 "code": "AUTH_REQUIRED",
-                "message": (
-                    "Authentication failed. The user may need to log in again."
-                ),
+                "message": "Authentication failed. Please log in again.",
+                "status_code": response.status_code,
             })
 
         if response.status_code == 403:
             return json.dumps({
                 "success": False,
                 "code": "FORBIDDEN",
-                "message": (
-                    "The user is not allowed to perform this action."
-                ),
+                "message": "The user is not allowed to perform this action.",
+                "status_code": response.status_code,
             })
 
         if response.status_code == 404:
             return json.dumps({
                 "success": False,
-                "message": (
-                    "The requested cart item or resource was not found."
-                ),
+                "code": "NOT_FOUND",
+                "message": "The requested cart item or resource was not found.",
+                "status_code": response.status_code,
             })
 
         if response.status_code == 422:
             return json.dumps({
                 "success": False,
                 "code": "VALIDATION_ERROR",
-                "message": (
-                    "The request data was rejected by the backend."
-                ),
+                "message": "The request data was rejected by the backend.",
+                "status_code": response.status_code,
             })
 
     except requests.Timeout:
+        if method.upper() == "GET":
+            code = "SERVICE_TIMEOUT"
+            message = "The cart service timed out. Please try again."
+        else:
+            code = "RESULT_UNKNOWN"
+            message = "Request timed out. Check the cart before retrying."
+
         return json.dumps({
             "success": False,
-            "code": "RESULT_UNKNOWN",
-            "message": "Request timed out. Check the cart before retrying.",
+            "code": code,
+            "message": message,
         })
 
     except requests.RequestException:
         return json.dumps({
             "success": False,
+            "code": "SERVICE_UNAVAILABLE",
             "message": "The cart service is temporarily unavailable.",
         })
 
     if not response.ok:
         return json.dumps({
             "success": False,
+            "code": "SERVICE_ERROR",
             "message": "The backend could not process the request.",
+            "status_code": response.status_code,
+        })
+
+    if response.status_code == 204:
+        return json.dumps({
+            "success": True,
+            "message": "Request completed successfully.",
+            "status_code": response.status_code,
         })
 
     try:
         data = response.json()
-
         return json.dumps(data, ensure_ascii=False)
 
     except ValueError:
         return json.dumps({
             "success": False,
+            "code": "INVALID_RESPONSE",
             "message": "The backend returned an invalid response.",
         })
+
     
 
 @mcp.tool()
 def search_products(query: str, limit: int = 5) -> str:
     """
-    Search the product catalog by product name, category, or attributes.
+    Search the live product catalog by product name,
+    category, or simple keywords.
 
-    The catalog primarily uses English product names and descriptions.
-    Convert the user's product search query into concise English
-    search terms before calling this tool.
-
-    Preserve relevant attributes such as color, material, and style.
-    Return matching catalog products; never invent product results.
+    Use search_product_knowledge for semantic matching
+    by material, features, style, or intended use.
     """
 
     if not query.strip():
@@ -216,7 +247,7 @@ def search_products(query: str, limit: int = 5) -> str:
 
 @mcp.tool()
 def get_product(product_id: int) -> str:
-    """Get current product details from Zivo by product ID."""
+    """Fetch current product details, including price and stock, by product ID."""
 
     if product_id < 1:
         return json.dumps({
@@ -267,18 +298,16 @@ def get_product(product_id: int) -> str:
 @mcp.tool()
 def search_product_knowledge(query: str) ->str:
     """
-    Search product knowledge by attributes, style, material,
-    features, and intended use.
+    Find product candidates by material, features,
+    characteristics, style, and intended use.
+
+    Results are candidates. Verify product details
+    using get_product.
     """
 
-    formatted_query = (
-        f"Instruct: {PRODUCT_SEARCH_INSTRUCTION}\n"
-        f"Query: {query}"
-    )
-
     documents = product_vector_store.similarity_search(
-        query=formatted_query,
-        k=3
+        query=query,
+        k=3,
     )
 
     if not documents:
@@ -299,11 +328,10 @@ def search_product_knowledge(query: str) ->str:
 @mcp.tool()
 def search_policy_knowledge(query: str) -> str:
     """
-    Search Zivo knowledge documents for return policies
-    and other documented store policies.
+    Search documented Zivo policies, including returns,
+    refunds, and shipping.
 
-    Do not use this tool for product prices, stock,
-    availability, or cart contents.
+    Do not use for live product, stock, or cart information.
     """
 
     if not query:
@@ -346,7 +374,7 @@ def add_to_cart(
     quantity: int,
     cart_api_token: str,
 ) -> str:
-    """Add a product to the user's cart."""
+    """Add a specified product and quantity to the user's cart."""
 
     if product_id < 1:
         return json.dumps({
@@ -448,7 +476,7 @@ def remove_from_cart(
 
 @mcp.tool()
 def clear_cart(cart_api_token: str) -> str:
-    """Remove all items from the user's cart."""
+    """Remove all items from the user's cart when explicitly requested."""
 
     return cart_request(
         method="DELETE",

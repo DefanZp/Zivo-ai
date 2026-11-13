@@ -1,14 +1,10 @@
 import argparse
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
 
-
-# locate main ai directory
-PROJECT_DIR = Path(__file__).resolve().parents[1]
 
 load_dotenv()
 

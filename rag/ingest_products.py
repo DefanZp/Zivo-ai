@@ -1,26 +1,29 @@
-# Project Configuration
 import os
 from pathlib import Path
 from typing import Any
 
+import requests
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
-from langchain_ollama import OllamaEmbeddings
-import requests
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 
+# Project configuration
 RAG_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = RAG_DIR.parent
 
-VECTOR_STORE_PATH = RAG_DIR / "chroma_db"
+VECTOR_STORE_PATH = RAG_DIR / "chroma_gemini_db"
 COLLECTION_NAME = "zivo_product_catalog"
 
 load_dotenv(PROJECT_DIR / ".env")
 
 BACKEND_URL = os.getenv("BACKEND_URL")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL")
-EMBEDDINGS_MODEL = os.getenv("OLLAMA_EMBEDDINGS_MODEL")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+EMBEDDING_MODEL = os.getenv(
+    "GEMINI_EMBEDDING_MODEL",
+    "models/gemini-embedding-001",
+)
 
 
 def validate_config() -> None:
@@ -28,13 +31,9 @@ def validate_config() -> None:
     if not BACKEND_URL:
         raise ValueError("BACKEND_URL has not been configured.")
 
-    if not OLLAMA_BASE_URL:
-        raise ValueError("OLLAMA_BASE_URL has not been configured.")
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY has not been configured.")
 
-    if not EMBEDDINGS_MODEL:
-        raise ValueError(
-            "OLLAMA_EMBEDDINGS_MODEL has not been configured."
-        )
 
 def fetch_all_product() -> list[dict[str, Any]]:
     """Fetch the complete product catalog without pagination."""
@@ -59,6 +58,7 @@ def fetch_all_product() -> list[dict[str, Any]]:
         )
 
     return products
+
 
 def format_specification_value(value: Any) -> str:
     """Convert specification values into readable text."""
@@ -115,17 +115,13 @@ def create_product_document(product: dict[str, Any]) -> Document:
         },
     )
 
+
 def create_vector_store() -> Chroma:
     """Connect to the product vector collection."""
-
-    embeddings = OllamaEmbeddings(
-        model=EMBEDDINGS_MODEL,
-        base_url=OLLAMA_BASE_URL,
-        client_kwargs={
-            "headers": {
-                "Authorization": f"Bearer {os.getenv("OLLAMA_API_KEY")}"
-            }
-        },
+    embeddings = GoogleGenerativeAIEmbeddings(
+        model=EMBEDDING_MODEL,
+        google_api_key=GEMINI_API_KEY,
+        task_type="RETRIEVAL_DOCUMENT",
     )
 
     return Chroma(
@@ -133,6 +129,7 @@ def create_vector_store() -> Chroma:
         embedding_function=embeddings,
         persist_directory=str(VECTOR_STORE_PATH),
     )
+
 
 def ingest_products() -> None:
     """Fetch products and synchronize the Chroma collection."""
@@ -160,7 +157,7 @@ def ingest_products() -> None:
     )
 
     # Remove products that no longer exist in the API catalog.
-    current_ids = vector_store.get()['ids']
+    current_ids = vector_store.get()["ids"]
     valid_ids = set(document_ids)
 
     stale_ids = [
@@ -172,10 +169,12 @@ def ingest_products() -> None:
     if stale_ids:
         vector_store.delete(ids=stale_ids)
 
-    print(f"Number of indexed products:: {len(documents)}")
+    print(f"Number of indexed products: {len(documents)}")
+    print(f"Embedding model: {EMBEDDING_MODEL}")
     print(f"Collection: {COLLECTION_NAME}")
     print(f"Database: {VECTOR_STORE_PATH}")
     print("Product ingestion completed.")
+
 
 if __name__ == "__main__":
     ingest_products()

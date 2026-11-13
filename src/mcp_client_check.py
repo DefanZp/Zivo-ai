@@ -21,6 +21,14 @@ async def main():
         # Meminta daftar tool yang tersedia.
         tools_result = await client.list_tools()
 
+        if not any(
+            tool.name == "search_products"
+            for tool in tools_result.tools
+        ):
+            raise RuntimeError(
+                "MCP tool search_products tidak ditemukan."
+            )
+
         print("Daftar MCP Tools:")
 
         for tool in tools_result.tools:
@@ -34,6 +42,11 @@ async def main():
                 "limit": 5,
             },
         )
+
+        if result.is_error:
+            raise RuntimeError(
+                "MCP search_products returned an error."
+            )
 
         print("\nHasil pencarian produk:")
 

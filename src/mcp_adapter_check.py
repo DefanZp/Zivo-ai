@@ -31,8 +31,9 @@ async def main():
         )
 
         if search_tool is None:
-            print("Tool search_products tidak ditemukan.")
-            return
+            raise RuntimeError(
+                "MCP tool search_products tidak ditemukan."
+            )
 
         # Memanggil MCP tool seperti LangChain tool biasa.
         print("\nMemanggil search_products...")
