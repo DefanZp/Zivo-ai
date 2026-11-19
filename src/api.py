@@ -3,6 +3,7 @@ import os
 from contextlib import asynccontextmanager
 import logging
 from pathlib import Path
+from typing import Literal
 from fastapi import (
     Depends, 
     FastAPI, 
@@ -88,6 +89,11 @@ def health_check():
 class ChatRequest(BaseModel):
     thread_id: str = Field(min_length=1, max_length=100)
     user_message: str = Field(min_length=1, max_length=5000)
+
+class ChatResumeRequest(BaseModel):
+    thread_id: str = Field(min_length=1, max_length=100)
+    interrupt_id: str = Field(min_length=1, max_length=200)
+    decision: Literal["approve", "reject"]
 
 async def verify_user_token(token: str) -> int:
     try:
@@ -301,36 +307,177 @@ async def chat_stream(
         )
 
     async def event_generator():
+        has_pending_approval = False
+
         try:
-            async for text_chunk in service.chat_stream(
+            async for stream_event in service.chat_stream(
                 effective_thread_id,
                 request.user_message,
                 cart_api_token,
             ):
-                if not text_chunk:
+                if not isinstance(stream_event, dict):
                     continue
 
-                # Kirim satu potongan teks sebagai SSE event.
-                payload = json.dumps(
-                    {"content": text_chunk},
-                    ensure_ascii=False
+                event_type = stream_event.get("type")
+
+                # Handle token streaming.
+                if event_type == "token":
+                    content = stream_event.get("content")
+
+                    if not isinstance(content, str) or not content:
+                        continue
+
+                    payload = json.dumps(
+                        {"content": content},
+                        ensure_ascii=False,
+                    )
+
+                    yield f"event: token\ndata: {payload}\n\n"
+
+                # Handle approval request.
+                elif event_type == "approval_required":
+                    has_pending_approval = True
+
+                    payload = json.dumps(
+                        {
+                            "interrupt_id": stream_event["interrupt_id"],
+                            "approval": stream_event["approval"],
+                        },
+                        ensure_ascii=False,
+                    )
+
+                    yield f"event: approval_required\ndata: {payload}\n\n"
+
+            # Beri tahu frontend bahwa streaming sudah selesai.
+            done_payload = json.dumps({
+                "status": (
+                    "waiting_for_approval"
+                    if has_pending_approval
+                    else "completed"
                 )
+            })
 
-                yield f"event: token\ndata: {payload}\n\n"
-
-            # Beri tahu frontend bahwa stream sudah selesai.
-            yield "event: done\ndata: {}\n\n"
+            yield f"event: done\ndata: {done_payload}\n\n"
 
         except Exception:
             logger.exception("[STREAM] AI response stream failed")
 
-            # Jangan bocorkan detail internal exception ke client.
             payload = json.dumps(
                 {"message": "Unable to stream AI response."}
             )
 
             yield f"event: error\ndata: {payload}\n\n"
 
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+@app.post("/chat/resume/stream")
+async def chat_resume_stream(
+    request: ChatResumeRequest,
+    authorization: str | None = Header(default=None),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> StreamingResponse:
+
+    service = app.state.agent_service
+
+    # Validasi header Authorization.
+    if authorization and credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Authorization header.",
+        )
+
+    # Resume cart action hanya tersedia untuk pengguna login.
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is required to resume cart actions.",
+        )
+
+    cart_api_token = credentials.credentials
+    user_id = await verify_user_token(cart_api_token)
+
+    # Gunakan thread ID yang sama dengan request awal.
+    effective_thread_id = (
+        f"user:{user_id}:thread:{request.thread_id}"
+    )
+
+    await record_thread_activity(
+        db_uri=db_uri,
+        effective_thread_id=effective_thread_id,
+        user_id=user_id,
+        client_thread_id=request.thread_id,
+    )
+
+    async def event_generator():
+        has_pending_approval = False
+
+        try:
+            async for stream_event in service.resume_chat_stream(
+                effective_thread_id,
+                request.interrupt_id,
+                request.decision,
+                cart_api_token,
+            ):
+                if not isinstance(stream_event, dict):
+                    continue
+
+                event_type = stream_event.get("type")
+
+                # Handle token streaming.
+                if event_type == "token":
+                    content = stream_event.get("content")
+
+                    if not isinstance(content, str) or not content:
+                        continue
+
+                    payload = json.dumps(
+                        {"content": content},
+                        ensure_ascii=False,
+                    )
+
+                    yield f"event: token\ndata: {payload}\n\n"
+
+                # Handle approval request berikutnya.
+                elif event_type == "approval_required":
+                    has_pending_approval = True
+
+                    payload = json.dumps(
+                        {
+                            "interrupt_id": stream_event["interrupt_id"],
+                            "approval": stream_event["approval"],
+                        },
+                        ensure_ascii=False,
+                    )
+
+                    yield f"event: approval_required\ndata: {payload}\n\n"
+
+            # Beri tahu frontend bahwa stream sudah selesai.
+            done_payload = json.dumps({
+                "status": (
+                    "waiting_for_approval"
+                    if has_pending_approval
+                    else "completed"
+                )
+            })
+
+            yield f"event: done\ndata: {done_payload}\n\n"
+
+        except Exception:
+            logger.exception("[RESUME STREAM] AI response stream failed")
+
+            payload = json.dumps(
+                {"message": "Unable to resume AI response stream."}
+            )
+
+            yield f"event: error\ndata: {payload}\n\n"
 
     return StreamingResponse(
         event_generator(),

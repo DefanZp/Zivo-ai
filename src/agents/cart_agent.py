@@ -4,7 +4,7 @@ import json
 from langchain.agents import create_agent
 from langchain.tools import tool, ToolRuntime
 from langchain_core.messages import ToolMessage
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
 from state import ZivoAgentContext, ZivoAgentState
 
@@ -32,6 +32,19 @@ prices, or operation results.
 - On AUTH_REQUIRED, tell the user to log in.
 - On FORBIDDEN, explain that the action is unauthorized.
 - Never claim an unsuccessful operation succeeded.
+
+APPROVAL RULES:
+- All cart mutation operations require explicit user approval.
+- The mutation tools handle approval through LangGraph interrupts.
+- Do not assume that the user's initial request is approval.
+- Do not claim that an operation has succeeded while waiting
+for approval.
+- If an operation returns ACTION_REJECTED, inform the user
+that the operation was not performed.
+- After approval, let the interrupted tool execution continue.
+- Do not call the same mutation tool again unnecessarily.
+- Only report success after receiving a successful tool result.
+- get_cart is read-only and does not require approval.
 
 CART OPERATIONS:
 
@@ -158,6 +171,11 @@ def create_mcp_add_to_cart_tool(mcp_add_to_cart_tool):
         state = runtime.state or {}
         product_id = state.get("selected_product_id")
 
+        print(
+            "[DEBUG add_to_cart] "
+            f"selected_product_id: {product_id}"
+        )
+
         if (
             isinstance(product_id, bool)
             or not isinstance(product_id, int)
@@ -189,6 +207,26 @@ def create_mcp_add_to_cart_tool(mcp_add_to_cart_tool):
                 "success": False,
                 "code": "AUTH_REQUIRED",
                 "message": "Please log in before adding products.",
+            })
+
+        decision = interrupt({
+            "type": "cart_action_approval",
+            "message": "Review this action before adding the product.",
+            "action": "add_to_cart",
+            "arguments": {
+                "product_id": product_id,
+                "quantity": quantity,
+            },
+        })
+
+        if (
+            not isinstance(decision, dict)
+            or decision.get("decision") != "approve"
+        ):
+            return json.dumps({
+                "success": False,
+                "code": "ACTION_REJECTED",
+                "message": "The user rejected this action. No cart change was made.",
             })
 
         result = await mcp_add_to_cart_tool.ainvoke({
@@ -236,6 +274,26 @@ def create_mcp_increase_quantity_tool(mcp_increase_quantity_tool):
                 "message": "Please log in before updating the cart.",
             })
 
+        decision = interrupt({
+            "type": "cart_action_approval",
+            "message": "Review this action before increasing the product quantity.",
+            "action": "increase_quantity",
+            "arguments": {
+                "product_id": product_id,
+                "quantity": 1,
+            },
+        })
+
+        if (
+            not isinstance(decision, dict)
+            or decision.get("decision") != "approve"
+        ):
+            return json.dumps({
+                "success": False,
+                "code": "ACTION_REJECTED",
+                "message": "The user rejected this action. No cart change was made.",
+            })
+
         result = await mcp_increase_quantity_tool.ainvoke({
             "product_id": product_id,
             "cart_api_token": cart_api_token,
@@ -280,6 +338,26 @@ def create_mcp_decrease_quantity_tool(mcp_decrease_quantity_tool):
                 "message": "Please log in before updating the cart.",
             })
 
+        decision = interrupt({
+            "type": "cart_action_approval",
+            "message": "Review this action before decreasing the product quantity.",
+            "action": "decrease_quantity",
+            "arguments": {
+                "product_id": product_id,
+                "quantity": 1,
+            },
+        })
+
+        if (
+            not isinstance(decision, dict)
+            or decision.get("decision") != "approve"
+        ):
+            return json.dumps({
+                "success": False,
+                "code": "ACTION_REJECTED",
+                "message": "The user rejected this action. No cart change was made.",
+            })
+
         result = await mcp_decrease_quantity_tool.ainvoke({
             "product_id": product_id,
             "cart_api_token": cart_api_token,
@@ -321,6 +399,25 @@ def create_mcp_remove_from_cart_tool(mcp_remove_from_cart_tool):
                 "message": "Please log in before updating the cart.",
             })
 
+        decision = interrupt({
+            "type": "cart_action_approval",
+            "message": "Review this action before removing the product from your cart.",
+            "action": "remove_from_cart",
+            "arguments": {
+                "product_id": product_id,
+            },
+        })
+
+        if (
+            not isinstance(decision, dict)
+            or decision.get("decision") != "approve"
+        ):
+            return json.dumps({
+                "success": False,
+                "code": "ACTION_REJECTED",
+                "message": "The user rejected this action. No cart change was made.",
+            })
+
         result = await mcp_remove_from_cart_tool.ainvoke({
             "product_id": product_id,
             "cart_api_token": token,
@@ -347,6 +444,22 @@ def create_mcp_clear_cart_tool(mcp_clear_cart_tool):
                 "success": False,
                 "code": "AUTH_REQUIRED",
                 "message": "Please log in before clearing the cart.",
+            })
+
+        decision = interrupt({
+            "type": "cart_action_approval",
+            "message": "Review this action before clearing your entire cart.",
+            "action": "clear_cart",
+        })
+
+        if (
+            not isinstance(decision, dict)
+            or decision.get("decision") != "approve"
+        ):
+            return json.dumps({
+                "success": False,
+                "code": "ACTION_REJECTED",
+                "message": "The user rejected this action. No cart change was made.",
             })
 
         result = await mcp_clear_cart_tool.ainvoke({
@@ -457,6 +570,11 @@ def create_cart_agent_tool(cart_agent):
             runtime.state or {}
         ).get("selected_product_id")
 
+        print(
+            "[DEBUG call_cart_agent] "
+            f"selected_product_id: {current_product_id}"
+        )
+        
         result = await cart_agent.ainvoke(
             {
                 "messages": [
@@ -478,6 +596,30 @@ def create_cart_agent_tool(cart_agent):
                 "Cart Agent returned no messages."
             )
 
+        # Check whether the user rejected a cart operation.
+        action_rejected = False
+
+        for message in messages:
+
+            if not isinstance(message, ToolMessage):
+                continue
+
+            if not isinstance(message.content, str):
+                continue
+
+            try:
+                tool_result = json.loads(message.content)
+            except json.JSONDecodeError:
+                continue
+
+            if (
+                isinstance(tool_result, dict)
+                and tool_result.get("code") == "ACTION_REJECTED"
+            ):
+                action_rejected = True
+                break
+
+
         final_message = messages[-1]
 
         # Normalize the final response content.
@@ -497,6 +639,14 @@ def create_cart_agent_tool(cart_agent):
 
         else:
             response_text = ""
+
+        # Preserve the rejection result for Supervisor.
+        if action_rejected:
+            response_text = (
+                "ACTION_REJECTED: The user explicitly rejected "
+                "this operation. No cart change was made. "
+                "Do not retry this operation."
+            )
 
         if not response_text.strip():
             raise RuntimeError(

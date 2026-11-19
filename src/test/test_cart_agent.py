@@ -1,11 +1,31 @@
 
 import json
+import sys
+
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
+
+
+# ========================================
+# ADD SRC DIRECTORY TO PYTHON PATH
+# ========================================
+
+SRC_DIR = Path(__file__).resolve().parents[1]
+
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+
+# ========================================
+# PROJECT IMPORTS
+# ========================================
+
+import agents.cart_agent as cart_agent_module
 
 from agents.cart_agent import (
     create_cart_agent_tool,
@@ -17,6 +37,16 @@ from agents.cart_agent import (
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture
+def approve_cart_action(monkeypatch):
+    """Simulate user approval for cart mutation tools."""
+    monkeypatch.setattr(
+        cart_agent_module,
+        "interrupt",
+        lambda approval: {"decision": "approve"},
+    )
 
 
 class FakeCartAgent:
@@ -121,7 +151,9 @@ async def test_cart_agent_returns_response_to_supervisor():
 # ========================================
 
 @pytest.mark.anyio
-async def test_add_to_cart_passes_product_id_and_token():
+async def test_add_to_cart_passes_product_id_and_token(
+    approve_cart_action,
+):
 
     mcp_tool = FakeMCPTool([
         {

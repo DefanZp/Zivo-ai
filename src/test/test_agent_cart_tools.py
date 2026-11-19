@@ -1,3 +1,4 @@
+
 """Unit tests for MCP wrappers used by Zivo agents.
 
 MCP calls are mocked, so no Laravel API, MCP server,
@@ -22,8 +23,12 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if not SRC_DIR.is_dir():
     # When this file is copied to src/test/, parents[1] is the src directory.
     SRC_DIR = Path(__file__).resolve().parents[1]
+
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+
+
+import agents.cart_agent as cart_agent_module
 
 from agents.cart_agent import (
     create_mcp_add_to_cart_tool,
@@ -37,6 +42,16 @@ from agents.cart_agent import (
 from agents.product_agent import (
     create_mcp_search_products_tool,
 )
+
+
+@pytest.fixture
+def approve_cart_action(monkeypatch):
+    """Simulate user approval for cart mutation tools."""
+    monkeypatch.setattr(
+        cart_agent_module,
+        "interrupt",
+        lambda approval: {"decision": "approve"},
+    )
 
 
 class FakeMCPTool:
@@ -83,8 +98,9 @@ def decode_result(result):
 # increase_quantity / decrease_quantity
 # ---------------------------------------------------------------------------
 
-
-def test_increase_quantity_uses_selected_product_and_awaits_mcp():
+def test_increase_quantity_uses_selected_product_and_awaits_mcp(
+    approve_cart_action,
+):
     mcp = FakeMCPTool(result='{"success": true}')
     tool = create_mcp_increase_quantity_tool(mcp)
 
@@ -124,7 +140,9 @@ def test_increase_quantity_requires_authentication():
     mcp.ainvoke.assert_not_awaited()
 
 
-def test_decrease_quantity_uses_selected_product_and_awaits_mcp():
+def test_decrease_quantity_uses_selected_product_and_awaits_mcp(
+    approve_cart_action,
+):
     mcp = FakeMCPTool(result='{"success": true}')
     tool = create_mcp_decrease_quantity_tool(mcp)
 
@@ -175,8 +193,9 @@ def test_quantity_change_requires_non_empty_token(factory):
 # add_to_cart
 # ---------------------------------------------------------------------------
 
-
-def test_add_to_cart_uses_selected_product_quantity_and_token():
+def test_add_to_cart_uses_selected_product_quantity_and_token(
+    approve_cart_action,
+):
     mcp = FakeMCPTool(result='{"success": true}')
     tool = create_mcp_add_to_cart_tool(mcp)
 
@@ -249,8 +268,9 @@ def test_add_to_cart_requires_authentication():
 # remove_from_cart / get_cart / clear_cart
 # ---------------------------------------------------------------------------
 
-
-def test_remove_from_cart_uses_selected_product_and_token():
+def test_remove_from_cart_uses_selected_product_and_token(
+    approve_cart_action,
+):
     mcp = FakeMCPTool(result='{"success": true}')
     tool = create_mcp_remove_from_cart_tool(mcp)
 
@@ -290,7 +310,9 @@ def test_get_cart_calls_mcp_and_returns_text_result():
     })
 
 
-def test_clear_cart_calls_mcp_with_token():
+def test_clear_cart_calls_mcp_with_token(
+    approve_cart_action,
+):
     mcp = FakeMCPTool(result='{"success": true}')
     tool = create_mcp_clear_cart_tool(mcp)
 
@@ -318,16 +340,25 @@ def test_clear_cart_requires_authentication():
 # MCP response handling and failure behavior
 # ---------------------------------------------------------------------------
 
-
 @pytest.mark.parametrize(
     ("mcp_result", "expected"),
     [
         ('{"success": true}', '{"success": true}'),
-        ([{"type": "text", "text": "first"}, {"type": "text", "text": "second"}], "first\nsecond"),
+        (
+            [
+                {"type": "text", "text": "first"},
+                {"type": "text", "text": "second"},
+            ],
+            "first\nsecond",
+        ),
         ({"success": True}, '{"success": true}'),
     ],
 )
-def test_increase_quantity_normalizes_mcp_result(mcp_result, expected):
+def test_increase_quantity_normalizes_mcp_result(
+    mcp_result,
+    expected,
+    approve_cart_action,
+):
     mcp = FakeMCPTool(result=mcp_result)
     tool = create_mcp_increase_quantity_tool(mcp)
 
@@ -337,7 +368,9 @@ def test_increase_quantity_normalizes_mcp_result(mcp_result, expected):
     mcp.ainvoke.assert_awaited_once()
 
 
-def test_mcp_exception_is_not_silently_reported_as_success():
+def test_mcp_exception_is_not_silently_reported_as_success(
+    approve_cart_action,
+):
     mcp = FakeMCPTool()
     mcp.ainvoke.side_effect = RuntimeError("MCP connection failed")
     tool = create_mcp_increase_quantity_tool(mcp)
@@ -352,10 +385,12 @@ def test_mcp_exception_is_not_silently_reported_as_success():
 # search_products wrapper
 # ---------------------------------------------------------------------------
 
-
 def test_search_products_clears_selected_product_and_returns_tool_message():
     mcp = FakeMCPTool(result=[
-        {"type": "text", "text": '[{"id": 12, "name": "Black Hoodie"}]'},
+        {
+            "type": "text",
+            "text": '[{"id": 12, "name": "Black Hoodie"}]',
+        },
     ])
     tool = create_mcp_search_products_tool(mcp)
     runtime = make_runtime(product_id=99)
@@ -363,7 +398,10 @@ def test_search_products_clears_selected_product_and_returns_tool_message():
     result = call_tool(tool, search="black hoodie", runtime=runtime)
 
     assert result.update["selected_product_id"] is None
-    assert result.update["messages"][0].content == '[{"id": 12, "name": "Black Hoodie"}]'
+    assert (
+        result.update["messages"][0].content
+        == '[{"id": 12, "name": "Black Hoodie"}]'
+    )
     assert result.update["messages"][0].tool_call_id == runtime.tool_call_id
     mcp.ainvoke.assert_awaited_once_with({
         "query": "black hoodie",
